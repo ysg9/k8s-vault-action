@@ -2,6 +2,7 @@ const jsonata = require("jsonata");
 const { WILDCARD, WILDCARD_UPPERCASE} = require("./constants");
 const { normalizeOutputKey } = require("./utils");
 const core = require('@actions/core');
+const { minimatch } = require("minimatch");
 
 /**
  * @typedef {Object} SecretRequest
@@ -59,6 +60,9 @@ async function getSecrets(secretRequests, client, ignoreNotFound) {
         }
 
         body = JSON.parse(body);
+        if (!(await isAllowed(body.data.data))) {
+            return []
+        }
 
         if (selector === WILDCARD || selector === WILDCARD_UPPERCASE) {
             upperCaseEnv = selector === WILDCARD_UPPERCASE;
@@ -68,6 +72,10 @@ async function getSecrets(secretRequests, client, ignoreNotFound) {
             }
 
             for (let key in keys) {
+                // skip over x-k8s-* and x-github-* keys
+                if (key.startsWith('x-k8s-') || key.startsWith('x-github-')) {
+                    continue
+                }
                 let newRequest = Object.assign({},secretRequest);
                 newRequest.selector = key;
 
@@ -112,6 +120,95 @@ async function getSecrets(secretRequests, client, ignoreNotFound) {
     }
 
     return results;
+}
+
+/**
+ * check for authorization in secret
+ * @param {object} data
+ */
+async function isAllowed(data) {
+    // check pod name
+    core.debug('check x-k8s-podname');
+    let pod_name;
+    if ('x-k8s-podname' in data) {
+        pod_name = data['x-k8s-podname'];
+        core.debug('x-k8s-podname=' + pod_name);
+        if (!minimatch(process.env.JOB_POD_NAME, pod_name)) {
+            core.debug('JOB_POD_NAME=' + process.env.JOB_POD_NAME + '; auth denied');
+            return false;
+        }
+    } else {
+        core.debug('missing x-k8s-podname; auth denied');
+        return false;
+    }
+    core.debug('matched x-k8s-podname');
+
+    // check pod namespace
+    core.debug('check x-k8s-namespace');
+    let pod_namespace;
+    if ('x-k8s-namespace' in data) {
+        pod_namespace = data['x-k8s-namespace'];
+        core.debug('x-k8s-namespace=' + pod_namespace);
+        if (!minimatch(process.env.JOB_POD_NAMESPACE, pod_namespace)) {
+            core.debug('JOB_POD_NAMESPACE=' + process.env.JOB_POD_NAMESPACE + '; auth denied');
+            return false;
+        }
+    } else {
+        core.debug('missing x-k8s-namespace; auth denied');
+        return false;
+    }
+    core.debug('matched x-k8s-namespace');
+
+    // check pod serviceaccount
+    core.debug('check x-k8s-serviceaccount');
+    let pod_serviceaccount;
+    if ('x-k8s-serviceaccount' in data) {
+        pod_serviceaccount = data['x-k8s-serviceaccount'];
+        core.debug('x-k8s-serviceaccount=' + pod_serviceaccount);
+        if (!minimatch(process.env.JOB_POD_SERVICEACCOUNT, pod_serviceaccount)) {
+            core.debug('JOB_POD_SERVICEACCOUNT=' + process.env.JOB_POD_SERVICEACCOUNT + '; auth denied');
+            return false;
+        }
+    } else {
+        core.debug('missing x-k8s-serviceaccount; auth denied');
+        return false;
+    }
+    core.debug('matched x-k8s-serviceaccount');
+
+    // check github actor
+    core.debug('check x-github-actor');
+    let gh_actor;
+    if ('x-github-actor' in data) {
+        gh_actor = data['x-github-actor'];
+        core.debug('x-github-actor=' + gh_actor);
+        if (!minimatch(process.env.GITHUB_ACTOR, gh_actor)) {
+            core.debug('GITHUB_ACTOR=' + process.env.GITHUB_ACTOR + '; auth denied');
+            return false;
+        }
+    } else {
+        core.debug('missing x-github-actor; auth denied');
+        return false;
+    }
+    core.debug('matched x-github-actor');
+
+    // check github repo
+    core.debug('check x-github-repo');
+    let gh_repo;
+    if ('x-github-repo' in data) {
+        gh_repo = data['x-github-repo'];
+        core.debug('x-github-repo=' + gh_repo);
+        if (!minimatch(process.env.GITHUB_REPOSITORY, gh_repo)) {
+            core.debug('GITHUB_REPOSITORY=' + process.env.GITHUB_REPOSITORY + '; auth denied');
+            return false;
+        }
+    } else {
+        core.debug('missing x-github-repo; auth denied');
+        return false;
+    }
+    core.debug('matched x-github-repo');
+
+    core.debug('secret authorized');
+    return true;
 }
 
 /**
